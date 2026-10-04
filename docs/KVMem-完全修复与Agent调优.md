@@ -122,3 +122,18 @@
 | `start_qwen3_8_27b_gsq_vision_ninfer.bat` | 图片/视频输入，48K |
 
 引擎二进制：`engine-kvmem\` 为三道门修复版（Release v1.1+ 的包）；`engine\` 为原版（无 KVMem）。
+
+## 6. KVMem 专属踩坑清单（本仓库实修实录）
+
+| # | 坑 | 处方 |
+|---|---|---|
+| 1 | chunk 1024 过池预填随机楔死（零错误行、prefill 零推进，2 条-11 条内必现） | **--prefill-chunk 256**（上游坑表同族处方）；两次实锤后 5/5 稳定 |
+| 2 | 强杀楔死引擎 = GPU 整卡掉线（PnP Unknown，需关机断电冷启动） | 楔死严禁 taskkill，直接冷启动；预防靠坑 1 |
+| 3 | `published MTP checkpoint is not materializable` / `invariant violated` / entitlement 500 | 三道门降级修复（docs/patches/），MTP+复用兼得 |
+| 4 | host-kv 双实例互挤：第二个实例 `failed to allocate 12288 MiB` | 双引擎不能同跑（16GB 权重×2 物理不可行）；实验借位时 host-kv-mib 减半 |
+| 5 | 结构化输出双重死刑：grammar×thinking 全烧零输出；低思考档 100% malformed 占位 | 不开 --structured-output（此构建） |
+| 6 | 思考预算三档标定：8192 工具轮最优 / 12288 偶发畸形 / 16384 数学不可行 | 工具任务 8192；深思考切全量档（可 32K） |
+| 7 | 词法检索非均匀：40K 题面 12 档深度扫描 9/12（14% 深度丢针）；词面不相交问句是照妖镜 | 重要事实别依赖跨窗检索；精读用全量档 |
+| 8 | 模板方言漂移（~100K 会话自造工具标记） | 防呆模板 chat_template_strict.jinja（§3.4） |
+| 9 | 客户端 max_tokens > 池 = invariant 崩溃诱因（dsh 40000 实锤） | max_tokens ≤ 池；引擎门 3 已修为降级 |
+| 10 | token 密度低估 1.8 倍导致测试题面全部超标 | 密度实测校准（~35 token/英文技术行） |
