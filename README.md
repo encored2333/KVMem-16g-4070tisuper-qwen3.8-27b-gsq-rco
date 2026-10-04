@@ -81,21 +81,20 @@ ninfer-serve.exe <模型.ninfer> ^
 
 ```
 ├── docs/
-│   ├── KVMem-完全修复与Agent调优.md   ← 主文档：三道门修复 / 参数处方 / dsh 配置表 / 行为边界
+│   ├── KVMem-完全修复与Agent调优.md   ← 主文档：三道门修复 / 引擎参数处方 / dsh 客户端配置表 / 行为边界
 │   ├── patches/                        ← 两道门的修复后完整源文件（request_plan.cpp / pressure.cpp）
-│   ├── 部署文档.md                     ← 基础部署（源码构建 / 依赖 / 转换 / 20 条踩坑，与姊妹仓库同源）
-│   ├── 性能实测.md                     ← 119.5K 全量档 bench（KVMem 专项数据在上面主文档）
+│   ├── 部署文档.md                     ← 基础参考（源码构建/依赖/踩坑 35 条，与姊妹仓库同源）
+│   ├── 性能实测.md                     ← 引擎基线 bench（119.5K 全量档；KVMem 专项数据在主文档）
 │   └── 模型转换指南.md                 ← GSQ-RCO GGUF → .ninfer 转换
 ├── scripts/
-│   ├── start_qwen3_8_27b_gsq_kvmem.bat          生产启动脚本（最终参数）
-│   ├── chat_template_strict.jinja               防工具调用方言漂移模板
-│   ├── build-sm89.bat / resume-sm89.bat         构建链（resume 防 OOM）
-│   ├── fetch-asset.bat                          vcpkg 资产下载器（代理→镜像→直连）
-│   └── kvmem-tests/                             全部验证脚本（修复验证/工具循环/疲劳测试/262K 档）
+│   ├── start_qwen3_8_27b_gsq_kvmem.bat   生产启动脚本（最终参数，五环境变量+防呆模板）
+│   ├── chat_template_strict.jinja        防工具调用方言漂移模板（--chat-template 挂载）
+│   ├── build-sm89.bat / resume-sm89.bat  本仓库引擎的构建链（resume 防 OOM）
+│   ├── fetch-asset.bat                   vcpkg 资产下载器（代理→镜像→直连）
+│   └── kvmem-tests/                      全部验证脚本（修复验证/工具循环/疲劳测试/262K 档）
 ├── conversion/                         转换报告（脱敏）
 └── LICENSE                             Apache-2.0
 ```
-
 ## 已知边界（诚实清单）
 
 - **楔死纪律**：过池预填极低概率楔死（零错误行）。**严禁 taskkill 强杀**——实测会把
