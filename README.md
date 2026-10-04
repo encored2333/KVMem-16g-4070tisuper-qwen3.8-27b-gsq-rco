@@ -1,105 +1,121 @@
-# NInfer on 16GB VRAM: RTX 4070 Ti SUPER 跑 Qwen3.8-27B (GSQ-RCO Q3)
+# KVMem 环完全修复版 · RTX 4070 Ti SUPER 16GB 跑 Qwen3.8-27B 的 256K 上下文
 
-> 在 **RTX 4070 Ti SUPER (16GB)** 上，通过**源码构建 sm_89 引擎**，完整复现 RTX 50 系专属的
-> NInfer + Qwen3.8-27B GSQ-RCO Q3 量化部署，并附带全套实测数据。
->
-> **结论先行：解码 112 tok/s @52K 上下文，比 RTX 5070 Ti 官方实测（99.4–105.6 tok/s）还快 9%。**
+> 在 **RTX 4070 Ti SUPER (16GB)** 上，通过移植并**完全修复** KVMem 环补丁的三道硬门，
+> 让 **MTP 投机解码与超池 host-backed 复用同时工作**，把 Qwen3.8-27B (GSQ-RCO IQ3_S)
+> 的逻辑上下文拓到 **256K**（设备池仅 75,776 token，其余 KV 驻留宿主层）。
+> 姊妹仓库 [ninfer-16g-4070tisuper-qwen3.8-27b-gsq-rco](https://github.com/encored2333/ninfer-16g-4070tisuper-qwen3.8-27b-gsq-rco)
+> 是 119.5K 无损全量档的基础部署。
 
-RTX 40 系用户没有官方预编译引擎可用（现成引擎只含 RTX 50 系的 sm_120a 机器码），本仓库提供
-从源码到上线的完整闭环：模型转换 → 引擎编译 → 运行目录组装 → 启动调优 → 性能验证。
+## 本仓库解决了什么
 
-## 实测结果（RTX 4070 Ti SUPER 16GB vs 官方 RTX 5070 Ti 16GB）
+上游 KVMem 环补丁（见致谢）只做完了 host-backed 复用的"发布"半边——"采纳"侧被三道
+只认内存状态的硬门堵死：MTP 检查点无法物化（`not materializable`）、宿主后备门漏扫
+backend、retained 前缀超配额直接 500。本仓库的修复（见 `docs/patches/`）：
 
-| 指标 | 5070 Ti 官方参考 | 4070 Ti SUPER 本机实测 | 达成率 |
-|---|---|---|---|
-| 解码 @52K 输入 | 99.4 – 105.6 tok/s | **112.0 tok/s** | **109%** |
-| 解码 短上下文专项 | ~123.6 tok/s | **139.7 tok/s** | ~113% |
-| Prefill @52K 输入 | 1,695 tok/s | **1,454.9 tok/s** | 86% |
-| Prefill @3.3K 输入 | — | **1,664.6 tok/s** | — |
-| TTFT @52K 输入 | 36.9 s | **35.7 s** | ≈持平 |
-| TTFT 短对话 | — | **0.35 s** | — |
+1. **MTP 采纳门**（`request_plan.cpp`）：backend 链在宿主层全链可恢复（每页 device 或
+   host-current）即放行采纳；真不可恢复才降级重填
+2. **宿主后备门**（`pressure.cpp`）：补 backend 页扫描（原版只扫 text）
+3. **entitlement 门**（`request_plan.cpp`）：retained 前缀超活跃配额时优雅降级，不再 500
 
-模型配置：Qwen3.8-27B **ISTA 变体** · GSQ-RCO 逐张量混精量化（IQ3_S 主体 + attention key / mlp down 用 IQ4_XS · MTP 模块 Q6_K · proposal 头 Q4_K）
-另有**视觉版**制品（text,mtp,vision，1176 张量）：支持图片/视频输入，实测发图识别通过（详见性能实测文档）。
-运行配置：strict 显存严格驻留 · **KV 池 97,280 tokens（rk8v4）** · 逻辑上下文 80K · MTP×4 自适应草稿 + ngram 查找
+修复后 **MTP 满血（decode 76~120 tok/s，接受率 64%）+ 超池复用（141,355 token 题面
+7.9 倍过池，100% response replay）同时工作**，且 agent 工具调用经 10 轮疲劳测试零畸形
+（配套防呆模板见下）。
 
-> 相比官方软件包的 Swift XXS 档（IQ3_XXS 主体），ISTA 的 IQ3_S 主体困惑度更优
-> （上游实测 WikiText-2 PPL 7.071，优于官方 IQ3_S 产物的 7.286）。
+## 实测数据（RTX 4070 Ti SUPER 16GB）
+
+| 项 | 值 |
+|---|---|
+| 逻辑上下文 | 262,144（模型原生上限）|
+| KV 池 | 75,776 token（1,184 页，k8v4）· runtime 3.38 GiB · free 843 MiB |
+| 常驻窗口 + 每轮检索 | 32,768 + 8,192 |
+| 解码 | 76~120 tok/s（MTP 接受率随任务 52~91%）|
+| 冷预填 | 129.5K ≈ 4~10 分钟（chunk 256，过池越深越慢）|
+| **追问/重发** | **0.3~2 秒**（response replay 100%，141K 题面实测 7.9 倍过池采纳）|
+| agent 工具调用 | 10 轮疲劳（含 45K 中段文档）零畸形 |
+
+对比姊妹仓库的 119.5K 无损全量档：KVMem 换来 2.2 倍上下文与追问秒回，代价是
+冷预填慢 3~7 倍（边写边分页搬家）+ 超窗近似可见性。两者按场景切换（bat 同端口互斥）。
+
+## 快速开始
+
+1. **引擎**：本仓库 [Release v1.0](../../releases/tag/v1.0) 下载 `engine-kvmem-fullfix.zip`
+   （三门修复版 `ninfer-serve.exe` + 全套 DLL），解压即用
+2. **模型**：按姊妹仓库的转换指南把 GSQ-RCO IQ3_S GGUF 转成 `.ninfer`（与显卡架构无关）
+3. **启动**：`scripts/start_qwen3_8_27b_gsq_kvmem.bat`（改路径区三行），或手工：
+
+```bat
+set CUDA_VISIBLE_DEVICES=0
+set NINFER_KV_WINDOW=32768
+set NINFER_KV_RETRIEVE=8192
+set NINFER_KV_RING=1
+set NINFER_HOST_PAGEABLE=1
+set NINFER_KV_REUSE_HOSTBACKED=1
+ninfer-serve.exe <模型.ninfer> ^
+  --model-id qwen3.8-27b --max-context 262144 ^
+  --kv-capacity 75776 --kv-dtype k8v4 --host-kv-mib 12288 --prefill-chunk 256 ^
+  --spec mtp --draft-tokens 4 --adaptive-mtp --lookup-ngram 31 ^
+  --max-shared-prefixes 0 --auto-long-anchors ^
+  --temperature 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 0 ^
+  --chat-template chat_template_strict.jinja ^
+  --port 8081
+```
+
+**五个环境变量是一组配置，缺一个会静默答错**；`--chat-template` 是防工具调用方言漂移的
+防呆模板（长会话必须挂）；`--prefill-chunk` 必须 256（1024 会随机楔死）。
+
+## Agent 客户端配置（dsh 等）
+
+| 字段 | 值 | 说明 |
+|---|---|---|
+| Base URL | `http://127.0.0.1:8081/v1` | 鉴权关闭 |
+| Model | `qwen3.8-27b` | |
+| API Key | 任意非空 | 引擎不校验 |
+| **max_tokens** | **≤ 24576** | 超池会触发降级重填（慢一轮，不失败）；曾因 40000 > 池触发过崩溃（已修复为降级，但别超）|
+| reasoning 回传 | **不回传** `reasoning_content` | 主因级退化源（上游单变量实验）|
+| 大文件写入 | 分轮，每轮 ≤12K | 思考 8K 预算 + 文件全文会顶满上限截坏收尾 |
+
+完整行为边界表（什么时候慢、什么时候降级、崩溃处理纪律）见
+[KVMem-完全修复与Agent调优.md](docs/KVMem-完全修复与Agent调优.md)。
 
 ## 仓库内容
 
 ```
 ├── docs/
-│   ├── 部署文档.md        ← 主文档：依赖全集 / 模型转换 / 源码编译 / 组装 / 启动调优 / 换显卡适配 / 20 条踩坑
-│   ├── 性能实测.md        ← 全套 bench 数据与官方参考对比、复测方法
-│   └── 模型转换指南.md    ← GSQ-RCO 原版 GGUF → .ninfer 完整方法（哈希校验 / 双变体 / 常见坑）
+│   ├── KVMem-完全修复与Agent调优.md   ← 主文档：三道门修复 / 参数处方 / dsh 配置表 / 行为边界
+│   ├── patches/                        ← 两道门的修复后完整源文件（request_plan.cpp / pressure.cpp）
+│   ├── 部署文档.md                     ← 基础部署（源码构建 / 依赖 / 转换 / 20 条踩坑，与姊妹仓库同源）
+│   ├── 性能实测.md                     ← 119.5K 全量档 bench（KVMem 专项数据在上面主文档）
+│   └── 模型转换指南.md                 ← GSQ-RCO GGUF → .ninfer 转换
 ├── scripts/
-│   ├── fetch-asset.bat            vcpkg 资产下载器（代理→镜像→直连三级回退，国内网络救星）
-│   ├── build-sm89.bat             一键 CMake 配置 + CUDA 算子编译 + nvprune + 链接
-│   ├── start_qwen3_8_27b_ninfer.bat        启动模板（文本版，strict，80K）
-│   ├── start_qwen3_8_27b_ninfer_vision.bat 启动模板（视觉版，支持图片/视频，48K）
-│   ├── resume-sm89.bat            低并发续编（32GB 内存机器防 OOM）
-│   └── validate/
-│       ├── bench.py               OpenAI 兼容接口基准测试（quick/full 两档，纯标准库）
-│       ├── watch_vram.ps1         显存驻留监控
-│       └── README.md              用法
-├── conversion/
-│   └── *.conversion.json          本仓库实测转换的完整报告（脱敏后）
-└── LICENSE                        Apache-2.0（沿用上游）
+│   ├── start_qwen3_8_27b_gsq_kvmem.bat          生产启动脚本（最终参数）
+│   ├── chat_template_strict.jinja               防工具调用方言漂移模板
+│   ├── build-sm89.bat / resume-sm89.bat         构建链（resume 防 OOM）
+│   ├── fetch-asset.bat                          vcpkg 资产下载器（代理→镜像→直连）
+│   └── kvmem-tests/                             全部验证脚本（修复验证/工具循环/疲劳测试/262K 档）
+├── conversion/                         转换报告（脱敏）
+└── LICENSE                             Apache-2.0
 ```
 
-**引擎成品（ninfer-serve.exe，sm_89）** 不入库（约 1.07 GB），见本仓库
-[Releases](../../releases) 页面的附件，下载后按部署文档第 6 节组装即可跳过编译。
-**模型权重（11.6 GB .ninfer）** 不入库，请按 [模型转换指南](docs/模型转换指南.md) 从
-HuggingFace 原版 GGUF 自行转换（CPU 上 1 分钟内完成）。
+## 已知边界（诚实清单）
 
-## 快速开始（已编译机器，5 分钟）
+- **楔死纪律**：过池预填极低概率楔死（零错误行）。**严禁 taskkill 强杀**——实测会把
+  4070 Ti SUPER 整卡拖下线（PnP Unknown），只能关机断电 30 秒冷启动。预防 = chunk 256
+- 超窗内容是"窗口 + 内容检索"的**近似可见**：词法打分（重写版环无向量语义），词面不相交
+  的提问可能漏召回——关键事实检索别指望 100%
+- 思考预算 8,192 是工具轮最优（12,288 偶发畸形、16,384 数学不可行）；深思考任务用姊妹
+  仓库全量档（可放 32K）
+- 双实例不能同时跑（16GB 显存装不下两份权重），bat 互斥切换
 
-```bat
-:: 1. 转换模型（详见 docs/模型转换指南.md，约 1 分钟）
-:: 2. 组装运行目录（详见 docs/部署文档.md 第 6 节）
-:: 3. 启动
-set CUDA_VISIBLE_DEVICES=0
-D:\ninfer\runtime\engine\ninfer-serve.exe <模型.ninfer> ^
-  --model-id qwen3.8-27b --max-context 81920 --prefill-chunk 256 ^
-  --cuda-memory-policy strict --kv-dtype rk8v4 --host-cache-mib 6144 ^
-  --default-max-tokens 0 --spec mtp --draft-tokens 4 --adaptive-mtp --lookup-ngram 31 ^
-  --port 8081
-:: API: http://127.0.0.1:8081/v1 （OpenAI / Anthropic 兼容）
-```
+## 致谢与来源（按依赖链）
 
-## KVMem 环：256K 上下文 + Agent 工作负载（v1.1 新增）
-
-在 16GB 卡上把逻辑上下文拓到 **256K**（设备池仅 75,776 token，其余宿主层），
-并修复上游补丁的三道硬门使 **MTP 投机与超池复用同时工作**；按上游防治文档调优
-agent 参数后，dsh 等 agent 客户端 10 轮疲劳测试零畸形。
-
-详见 [KVMem-完全修复与Agent调优.md](docs/KVMem-完全修复与Agent调优.md)
-（含 dsh 客户端参数表、三道门源码修复、行为边界表）。
-
-## 40 系 / 其他显卡适配速查
-
-| 你的显卡 | 引擎二进制 | 需要做的事 |
+| 组件 | 来源 | 许可 |
 |---|---|---|
-| RTX 4080 / 4090 (sm_89) | **直接复用本仓库 Release 的成品** | 仅需首启重新校准 + 重测显存上限 |
-| RTX 4070 Ti / 4070 SUPER (sm_89, 12GB) | 同上 | 显存更小，上下文上限按比例下调（文档第 7 节有方法） |
-| RTX 5070 Ti / 5080 / 5090 (sm_120a) | **直接用官方软件包**，无需本仓库 | 换卡后重新校准即可 |
-| RTX 30 系 (sm_86) | 需重编译：`CMAKE_CUDA_ARCHITECTURES=86` | 其余流程完全一致 |
+| NInfer 引擎基座 | [Neroued/ninfer](https://github.com/Neroued/ninfer) · 汇总线 [iamwavecut/ninfer-all](https://github.com/iamwavecut/ninfer-all) · 16GB 分支 [Ryan-gsq/ninfer-16g-5070ti-5080-5090-qwen3.8-27b-gsq-rco](https://github.com/Ryan-gsq/ninfer-16g-5070ti-5080-5090-qwen3.8-27b-gsq-rco)（姊妹仓库同源） | Apache-2.0 |
+| **KVMem 环补丁 + 复现白皮书 + 防治文档**（本仓库的直接基座） | **[shensanshu/ninfer-master-shensanshu-kvmem](https://modelscope.cn/models/shensanshu/ninfer-master-shensanshu-kvmem)**（ModelScope）：34 文件补丁、《复现白皮书》《卡死与循环的防治》等全套文档 | Apache-2.0 |
+| KVMem 环算法实现 | [tancau/ninfer-kvmem-ring](https://github.com/tancau/ninfer-kvmem-ring)（已并入上述补丁） | Apache-2.0 |
+| KVMem 算法语义（常驻窗口/检索预算/差量计划） | [kvmem-qw3](https://github.com/kvmem-qw3)（作者 Di Chai；仅沿用公开语义，未含其源码） | Apache-2.0 |
+| 本仓库独有 | 三道硬门修复（MTP 采纳/宿主后备门/entitlement）、防呆模板、agent 参数处方、16GB 卡全链验证 | Apache-2.0 |
+| 模型与量化 | Qwen3.8-27B（阿里 Qwen 团队）· GSQ-RCO 量化：ISTA-DASLab | Apache-2.0 |
 
-详见 [部署文档 · 换显卡适配指南](docs/部署文档.md#9-换显卡适配指南)。
-
-## 环境要求
-
-- Windows 11，NVIDIA 驱动 ≥ R580（实测 616.56）
-- 16GB 显存（12GB 可跑，上下文相应缩减）；系统内存建议 32GB（编译 CUDA 算子峰值较高，需 `-j 8` 防溢出，文档有说明）
-- 磁盘 ≥ 60GB：源码/构建 ~15GB + 模型 GGUF 12GB + .ninfer 11.6GB + 依赖缓存 ~10GB
-- 工具链：VS2022 Build Tools (MSVC v143 **14.44.35207**)、CUDA Toolkit **13.4**、CMake **≥4.4.3**、Ninja、Git、Python 3.11（转换用）、vcpkg（classic 模式）
-
-## 致谢与来源
-
-- 引擎上游：[Neroued/ninfer](https://github.com/Neroued/ninfer) · 汇总线
-  [iamwavecut/ninfer-all](https://github.com/iamwavecut/ninfer-all) · 本分支路线来自
-  [Ryan-gsq/ninfer-16g-5070ti-5080-5090-qwen3.8-27b-gsq-rco](https://github.com/Ryan-gsq/ninfer-16g-5070ti-5080-5090-qwen3.8-27b-gsq-rco)
-  （其文档与软件包构成本项目的基础，本仓库是其 **RTX 40 系适配分支**）
-- 模型与量化：Qwen3.8-27B（阿里 Qwen 团队）· GSQ-RCO 量化：ISTA-DASLab / Swift 变体作者
-- 本仓库所有改动与实测数据基于 Apache-2.0 开源合规再分发
+所有改动与实测数据基于各上游的 Apache-2.0 授权合规再分发；模型权重不在本仓库，
+版权归各自作者。

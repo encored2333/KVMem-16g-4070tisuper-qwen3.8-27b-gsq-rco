@@ -1,6 +1,7 @@
 # KVMem 环完全修复与 Agent 场景调优实录
 
-> 在 16GB RTX 4070 Ti SUPER 上把上游 KVMem 环补丁（shensanshu/ninfer-master-shensanshu-kvmem，
+> **来源锚定**：本文所称《白皮书》《防治文档》均指 KVMem 补丁仓 [shensanshu/ninfer-master-shensanshu-kvmem](https://modelscope.cn/models/shensanshu/ninfer-master-shensanshu-kvmem) 内的《复现白皮书-NInfer-KVMem环-20261002.md》与《04-卡死与循环的防治.md》；环实现 = tancau/ninfer-kvmem-ring；算法语义 = kvmem-qw3（Di Chai）。
+> > 在 16GB RTX 4070 Ti SUPER 上把上游 KVMem 环补丁（shensanshu/ninfer-master-shensanshu-kvmem，
 > 基线 0.11.0-rtx3090，与我们的源码树同基线）从"原型可用"推进到"agent 生产可用"的完整记录。
 > 包含三处引擎源码修复、一组参数处方、dsh 等 agent 客户端的配置表、以及全部验证数据。
 
