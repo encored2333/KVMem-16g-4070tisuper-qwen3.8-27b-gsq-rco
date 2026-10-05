@@ -82,7 +82,8 @@ ninfer-serve.exe <模型.ninfer> ^
 ```
 ├── docs/
 │   ├── KVMem-完全修复与Agent调优.md   ← 主文档：三道门修复 / 引擎参数处方 / dsh 客户端配置表 / 行为边界
-│   ├── patches/                        ← 两道门的修复后完整源文件（request_plan.cpp / pressure.cpp）
+│   ├── 工具调用解析加固-A至G类问题与修复.md  ← 解析器加固：A–G 类畸形形态逐条修复 / 两个合同变更 / 新增诊断字段
+│   ├── patches/                        ← 修复后完整源文件（request_plan.cpp / pressure.cpp / tool_call_parser.cpp / types.h / 日志与测试）
 │   ├── 部署文档.md                     ← 基础参考（源码构建/依赖/踩坑 35 条，与姊妹仓库同源）
 │   ├── 性能实测.md                     ← 引擎基线 bench（119.5K 全量档；KVMem 专项数据在主文档）
 │   └── 模型转换指南.md                 ← GSQ-RCO GGUF → .ninfer 转换

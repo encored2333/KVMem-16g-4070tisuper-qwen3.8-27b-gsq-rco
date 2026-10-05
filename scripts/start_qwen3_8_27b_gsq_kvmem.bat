@@ -69,7 +69,8 @@ ninfer-serve.exe "%MODEL_FILE%" ^
   --max-shared-prefixes 0 --auto-long-anchors ^
   --temperature 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 0 ^
   --default-reasoning-effort xhigh --default-thinking-budget 8192 ^
-  --port %PORT% --log-stats-interval-ms 1000 --log-colours off
+  --port %PORT% --log-stats-interval-ms 1000 --log-colours off ^
+  --request-log-jsonl D:\ninfer\logs\requests-kvmem.jsonl --request-log-max-mib 64
 
 echo.
 echo Engine exited.
