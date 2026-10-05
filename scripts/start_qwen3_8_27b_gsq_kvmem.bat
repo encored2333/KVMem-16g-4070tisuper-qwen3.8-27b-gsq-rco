@@ -69,7 +69,7 @@ ninfer-serve.exe "%MODEL_FILE%" ^
   --max-shared-prefixes 0 --auto-long-anchors ^
   --temperature 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 0 ^
   --default-reasoning-effort xhigh --default-thinking-budget 8192 ^
-  --port %PORT% --log-colours off
+  --port %PORT% --log-stats-interval-ms 1000 --log-colours off
 
 echo.
 echo Engine exited.
